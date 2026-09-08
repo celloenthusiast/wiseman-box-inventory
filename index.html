@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Box Inventory</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="apple-touch-icon" href="favicon.png">
+  <link rel="manifest" href="manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Box Inventory">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#ffffff">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    :root { --bg:#fff; --accent:#315a7d; --text:#17202a; --muted:#667085; --danger:#b42318; }
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    html, body { margin:0; width:100%; height:100%; min-height:100vh; min-height:100svh; overflow:hidden; background:var(--bg); font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    #appFrame { position:fixed; inset:0; width:100%; height:100%; height:100svh; border:0; margin:0; padding:0; background:#fff; z-index:1; }
+    #loading { position:fixed; inset:0; z-index:20; display:grid; place-items:center; background:#fff; transition:opacity .18s ease; }
+    #loading.hidden { opacity:0; pointer-events:none; }
+    .loadingInner { text-align:center; padding:24px; }
+    .loadingIcon { width:96px; height:96px; border-radius:22px; object-fit:cover; box-shadow:0 6px 20px rgba(0,0,0,.10); }
+    .loadingTitle { margin-top:14px; font-size:21px; font-weight:750; color:var(--text); }
+    .loadingText { margin-top:5px; font-size:14px; color:var(--muted); max-width:340px; }
+    .spinner { width:24px; height:24px; margin:18px auto 0; border:3px solid #dce4ea; border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    #scannerOverlay { position:fixed; inset:0; z-index:100; display:none; background:#000; color:#fff; overflow:hidden; }
+    #scannerOverlay.show { display:block; }
+    #reader { position:absolute; inset:0; width:100%; height:100%; background:#000; }
+    #reader video { width:100% !important; height:100% !important; object-fit:cover !important; }
+    .scannerShade { position:absolute; inset:0; z-index:5; pointer-events:none; background:linear-gradient(to bottom,rgba(0,0,0,.55) 0 24%,rgba(0,0,0,.08) 24% 70%,rgba(0,0,0,.55) 70% 100%); }
+    .scanTarget { position:absolute; z-index:6; left:12vw; right:12vw; top:27vh; aspect-ratio:1/1; max-height:46vh; border:3px solid rgba(255,255,255,.96); border-radius:20px; pointer-events:none; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+    .scanTarget::after { content:""; position:absolute; left:8%; right:8%; top:50%; height:2px; transform:translateY(-1px); background:#ff4d4d; box-shadow:0 0 8px rgba(255,77,77,.8); }
+    .scannerTop { position:absolute; z-index:10; top:0; left:0; right:0; padding:max(16px,env(safe-area-inset-top)) 18px 14px; text-align:center; text-shadow:0 1px 5px #000; }
+    .scannerTop h1 { margin:5px 0 4px; font-size:22px; }
+    .scannerTop p { margin:0; font-size:14px; opacity:.92; }
+    .scannerBottom { position:absolute; z-index:10; left:0; right:0; bottom:0; padding:16px 16px max(18px,env(safe-area-inset-bottom)); text-align:center; }
+    #scannerStatus { min-height:22px; margin-bottom:10px; font-size:14px; text-shadow:0 1px 5px #000; }
+    .scannerButtons { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; }
+    .scannerButtons button { min-height:48px; border:0; border-radius:12px; padding:10px 16px; font:inherit; font-weight:700; background:rgba(255,255,255,.94); color:#17202a; }
+    .scannerButtons button.danger { background:rgba(180,35,24,.94); color:#fff; }
+    #scanSuccess { position:absolute; inset:0; z-index:20; display:none; place-items:center; text-align:center; background:rgba(8,25,18,.78); pointer-events:none; }
+    #scanSuccess.show { display:grid; }
+    .successCheck { font-size:64px; line-height:1; }
+    .successCode { margin-top:8px; font-size:22px; font-weight:800; }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="loadingInner">
+      <img class="loadingIcon" src="favicon.png" alt="">
+      <div class="loadingTitle">Box Inventory</div>
+      <div id="loadingText" class="loadingText">Opening inventory…</div>
+      <div class="spinner" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <iframe id="appFrame" title="Box Inventory" allow="camera; clipboard-read; clipboard-write"></iframe>
+
+  <div id="scannerOverlay" aria-hidden="true">
+    <div id="reader"></div>
+    <div class="scannerShade"></div>
+    <div class="scanTarget"></div>
+    <div class="scannerTop"><h1>Scan Box QR Code</h1><p>Hold the box label inside the square.</p></div>
+    <div class="scannerBottom"><div id="scannerStatus">Starting rear camera…</div><div class="scannerButtons"><button type="button" onclick="closeScanner()">Cancel</button><button class="danger" type="button" onclick="closeScanner()">End Camera</button></div></div>
+    <div id="scanSuccess"><div><div class="successCheck">✓</div><div>Box found</div><div id="successCode" class="successCode"></div></div></div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // IMPORTANT: replace this one value after deploying Apps Script.
+    const APPS_SCRIPT_URL = 'PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE';
+
+    const frame = document.getElementById('appFrame');
+    const loading = document.getElementById('loading');
+    const loadingText = document.getElementById('loadingText');
+    const scannerOverlay = document.getElementById('scannerOverlay');
+    const scannerStatus = document.getElementById('scannerStatus');
+    const scanSuccess = document.getElementById('scanSuccess');
+    const successCode = document.getElementById('successCode');
+
+    let appMessageWindow = null;
+    let scanner = null;
+    let acceptingScan = false;
+
+    function getRequestedBox() {
+      try {
+        const box = new URLSearchParams(location.search).get('box') || '';
+        return normalizeBoxId(box);
+      } catch (error) { return ''; }
+    }
+
+    function buildAppUrl() {
+      if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(APPS_SCRIPT_URL)) return '';
+      const url = new URL(APPS_SCRIPT_URL);
+      url.searchParams.set('embed', '1');
+      url.searchParams.set('v', '1.0');
+      const box = getRequestedBox();
+      if (box) url.searchParams.set('box', box);
+      return url.toString();
+    }
+
+    const appUrl = buildAppUrl();
+    if (!appUrl) {
+      loadingText.textContent = 'Setup needed: edit GitHub index.html and paste your Apps Script /exec URL into APPS_SCRIPT_URL.';
+      document.querySelector('.spinner').style.display = 'none';
+    } else {
+      frame.src = appUrl;
+      frame.addEventListener('load', () => setTimeout(() => loading.classList.add('hidden'), 250));
+      setTimeout(() => loading.classList.add('hidden'), 8000);
+    }
+
+    window.addEventListener('message', event => {
+      const data = event.data || {};
+      if (data.type !== 'wiseman-box-open-scanner') return;
+      if (!event.source || event.source === window) return;
+      appMessageWindow = event.source;
+      openScanner();
+    });
+
+    function sendToApp(message) {
+      if (appMessageWindow) {
+        try { appMessageWindow.postMessage(message, '*'); return; } catch (error) { console.warn(error); }
+      }
+      if (frame.contentWindow) frame.contentWindow.postMessage(message, '*');
+    }
+
+    function normalizeBoxId(value) {
+      const text = String(value || '').toUpperCase();
+      const match = text.match(/\bBOX-(\d{1,8})\b/);
+      if (!match) return '';
+      return 'BOX-' + String(Number(match[1])).padStart(Math.max(3, match[1].length), '0');
+    }
+
+    function extractBoxId(decodedText) {
+      const raw = String(decodedText || '').trim();
+      try {
+        const url = new URL(raw);
+        const fromQuery = normalizeBoxId(url.searchParams.get('box') || '');
+        if (fromQuery) return fromQuery;
+      } catch (error) {}
+      return normalizeBoxId(raw);
+    }
+
+    async function openScanner() {
+      if (acceptingScan) return;
+      scannerOverlay.classList.add('show');
+      scannerOverlay.setAttribute('aria-hidden', 'false');
+      scanSuccess.classList.remove('show');
+      scannerStatus.textContent = 'Starting rear camera…';
+      acceptingScan = true;
+
+      try {
+        scanner = new Html5Qrcode('reader', { formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE] });
+        const config = {
+          fps:12,
+          qrbox:(w,h) => {
+            const size = Math.floor(Math.min(w,h) * .72);
+            return { width:size, height:size };
+          },
+          aspectRatio:1.777778,
+          disableFlip:true
+        };
+
+        try {
+          await scanner.start({ facingMode:{ exact:'environment' } }, config, onScanSuccess, () => {});
+        } catch (firstError) {
+          await scanner.start({ facingMode:'environment' }, config, onScanSuccess, () => {});
+        }
+        scannerStatus.textContent = 'Ready — point at a Box Inventory QR code.';
+      } catch (error) {
+        console.error(error);
+        acceptingScan = false;
+        scannerStatus.textContent = 'Camera could not start. Check camera permission for this GitHub page.';
+        sendToApp({ type:'wiseman-box-scanner-error', message:'Camera could not start. Check camera permission for the GitHub Box Inventory page.' });
+      }
+    }
+
+    async function onScanSuccess(decodedText) {
+      if (!acceptingScan) return;
+      const boxId = extractBoxId(decodedText);
+      if (!boxId) {
+        scannerStatus.textContent = 'That QR code is not a Box Inventory label.';
+        return;
+      }
+
+      acceptingScan = false;
+      if (navigator.vibrate) navigator.vibrate(70);
+      successCode.textContent = boxId;
+      scanSuccess.classList.add('show');
+      sendToApp({ type:'wiseman-box-id', boxId:boxId });
+
+      setTimeout(async () => {
+        await stopScanner();
+        scannerOverlay.classList.remove('show');
+        scannerOverlay.setAttribute('aria-hidden', 'true');
+        scanSuccess.classList.remove('show');
+      }, 320);
+    }
+
+    async function stopScanner() {
+      acceptingScan = false;
+      if (!scanner) return;
+      try { await scanner.stop(); } catch (error) {}
+      try { await scanner.clear(); } catch (error) {}
+      scanner = null;
+      document.getElementById('reader').innerHTML = '';
+    }
+
+    async function closeScanner() {
+      await stopScanner();
+      scannerOverlay.classList.remove('show');
+      scannerOverlay.setAttribute('aria-hidden', 'true');
+      scanSuccess.classList.remove('show');
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && scanner) closeScanner();
+    });
+  </script>
+</body>
+</html>
