@@ -63,7 +63,7 @@
     <div id="reader"></div>
     <div class="scannerShade"></div>
     <div class="scanTarget"></div>
-    <div class="scannerTop"><h1>Scan Box QR Code</h1><p>Hold the box label inside the square.</p></div>
+    <div class="scannerTop"><h1>Scan Box QR Code</h1><p>Aim the box label near the center. The full camera view is scanned.</p></div>
     <div class="scannerBottom"><div id="scannerStatus">Starting rear camera…</div><div class="scannerButtons"><button type="button" onclick="closeScanner()">Cancel</button><button class="danger" type="button" onclick="closeScanner()">End Camera</button></div></div>
     <div id="scanSuccess"><div><div class="successCheck">✓</div><div>Box found</div><div id="successCode" class="successCode"></div></div></div>
   </div>
@@ -97,7 +97,7 @@
       if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(APPS_SCRIPT_URL)) return '';
       const url = new URL(APPS_SCRIPT_URL);
       url.searchParams.set('embed', '1');
-      url.searchParams.set('v', '1.0');
+      url.searchParams.set('v', '1.1-scannerfix2');
       const box = getRequestedBox();
       if (box) url.searchParams.set('box', box);
       return url.toString();
@@ -154,15 +154,12 @@
       acceptingScan = true;
 
       try {
+        if (typeof Html5Qrcode === 'undefined' || typeof Html5QrcodeSupportedFormats === 'undefined') {
+          throw new Error('QR scanner library did not load.');
+        }
         scanner = new Html5Qrcode('reader', { formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE] });
         const config = {
-          fps:12,
-          qrbox:(w,h) => {
-            const size = Math.floor(Math.min(w,h) * .72);
-            return { width:size, height:size };
-          },
-          aspectRatio:1.777778,
-          disableFlip:true
+          fps:15
         };
 
         try {
