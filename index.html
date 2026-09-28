@@ -12,7 +12,6 @@
   <meta name="apple-mobile-web-app-title" content="Box Inventory">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#ffffff">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <style>
     :root { --bg:#fff; --accent:#315a7d; --text:#17202a; --muted:#667085; --danger:#b42318; }
     * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -28,10 +27,21 @@
     @keyframes spin { to { transform:rotate(360deg); } }
     #scannerOverlay { position:fixed; inset:0; z-index:100; display:none; background:#000; color:#fff; overflow:hidden; }
     #scannerOverlay.show { display:block; }
-    #reader { position:absolute; inset:0; width:100%; height:100%; background:#000; }
-    #reader video { width:100% !important; height:100% !important; object-fit:cover !important; }
+    #scannerVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
     .scannerShade { position:absolute; inset:0; z-index:5; pointer-events:none; background:linear-gradient(to bottom,rgba(0,0,0,.55) 0 24%,rgba(0,0,0,.08) 24% 70%,rgba(0,0,0,.55) 70% 100%); }
-    .scanTarget { position:absolute; z-index:6; left:12vw; right:12vw; top:27vh; aspect-ratio:1/1; max-height:46vh; border:3px solid rgba(255,255,255,.96); border-radius:20px; pointer-events:none; box-shadow:0 0 0 1px rgba(0,0,0,.35); }
+    .scanTarget {
+      position:absolute;
+      z-index:6;
+      left:50%;
+      top:50%;
+      width:min(76vw,46vh);
+      aspect-ratio:1/1;
+      transform:translate(-50%,-50%);
+      border:3px solid rgba(255,255,255,.96);
+      border-radius:20px;
+      pointer-events:none;
+      box-shadow:0 0 0 1px rgba(0,0,0,.35);
+    }
     .scanTarget::after { content:""; position:absolute; left:8%; right:8%; top:50%; height:2px; transform:translateY(-1px); background:#ff4d4d; box-shadow:0 0 8px rgba(255,77,77,.8); }
     .scannerTop { position:absolute; z-index:10; top:0; left:0; right:0; padding:max(16px,env(safe-area-inset-top)) 18px 14px; text-align:center; text-shadow:0 1px 5px #000; }
     .scannerTop h1 { margin:5px 0 4px; font-size:22px; }
@@ -60,10 +70,10 @@
   <iframe id="appFrame" title="Box Inventory" allow="camera; clipboard-read; clipboard-write"></iframe>
 
   <div id="scannerOverlay" aria-hidden="true">
-    <div id="reader"></div>
+    <video id="scannerVideo" muted playsinline></video>
     <div class="scannerShade"></div>
     <div class="scanTarget"></div>
-    <div class="scannerTop"><h1>Scan Box QR Code</h1><p>Aim the box label near the center. The full camera view is scanned.</p></div>
+    <div class="scannerTop"><h1>Scan Box QR Code</h1><p>Place one Box Inventory QR code fully inside the center square.</p></div>
     <div class="scannerBottom"><div id="scannerStatus">Starting rear camera…</div><div class="scannerButtons"><button type="button" onclick="closeScanner()">Cancel</button><button class="danger" type="button" onclick="closeScanner()">End Camera</button></div></div>
     <div id="scanSuccess"><div><div class="successCheck">✓</div><div>Box found</div><div id="successCode" class="successCode"></div></div></div>
   </div>
@@ -71,6 +81,7 @@
   <script>
     'use strict';
 
+    // Scanner build 1.2.0 — Nimiq QR engine, center-region decoding.
     // IMPORTANT: replace this one value after deploying Apps Script.
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw-Y2TYCufqllfnCzcq_EtCh4sq7BWVmZTGsO5aT3XmEdlGarcEHz3LOPJlo26aOrT-/exec';
 
@@ -78,13 +89,22 @@
     const loading = document.getElementById('loading');
     const loadingText = document.getElementById('loadingText');
     const scannerOverlay = document.getElementById('scannerOverlay');
+    const scannerVideo = document.getElementById('scannerVideo');
     const scannerStatus = document.getElementById('scannerStatus');
     const scanSuccess = document.getElementById('scanSuccess');
     const successCode = document.getElementById('successCode');
 
     let appMessageWindow = null;
     let scanner = null;
+    let QrScannerClass = null;
     let acceptingScan = false;
+
+    async function getQrScannerClass() {
+      if (QrScannerClass) return QrScannerClass;
+      const module = await import('https://cdn.jsdelivr.net/npm/qr-scanner@1.4.2/qr-scanner.min.js');
+      QrScannerClass = module.default;
+      return QrScannerClass;
+    }
 
     function getRequestedBox() {
       try {
@@ -97,7 +117,7 @@
       if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(APPS_SCRIPT_URL)) return '';
       const url = new URL(APPS_SCRIPT_URL);
       url.searchParams.set('embed', '1');
-      url.searchParams.set('v', '1.1-scannerfix2');
+      url.searchParams.set('v', '1.2.0');
       const box = getRequestedBox();
       if (box) url.searchParams.set('box', box);
       return url.toString();
@@ -147,6 +167,7 @@
 
     async function openScanner() {
       if (acceptingScan) return;
+
       scannerOverlay.classList.add('show');
       scannerOverlay.setAttribute('aria-hidden', 'false');
       scanSuccess.classList.remove('show');
@@ -154,38 +175,69 @@
       acceptingScan = true;
 
       try {
-        if (typeof Html5Qrcode === 'undefined' || typeof Html5QrcodeSupportedFormats === 'undefined') {
-          throw new Error('QR scanner library did not load.');
-        }
-        scanner = new Html5Qrcode('reader', { formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE] });
-        const config = {
-          fps:15
-        };
+        const QrScanner = await getQrScannerClass();
 
-        try {
-          await scanner.start({ facingMode:{ exact:'environment' } }, config, onScanSuccess, () => {});
-        } catch (firstError) {
-          await scanner.start({ facingMode:'environment' }, config, onScanSuccess, () => {});
-        }
-        scannerStatus.textContent = 'Ready — point at a Box Inventory QR code.';
+        scanner = new QrScanner(
+          scannerVideo,
+          result => onScanSuccess(result && result.data ? result.data : result),
+          {
+            preferredCamera:'environment',
+            maxScansPerSecond:25,
+            returnDetailedScanResult:true,
+
+            // Only decode the center square. The library receives coordinates
+            // in the camera's native video pixels, so this remains centered
+            // regardless of screen shape or CSS cropping.
+            calculateScanRegion:video => {
+              const vw = video.videoWidth || 1280;
+              const vh = video.videoHeight || 720;
+              const size = Math.floor(Math.min(vw, vh) * 0.72);
+
+              return {
+                x:Math.floor((vw - size) / 2),
+                y:Math.floor((vh - size) / 2),
+                width:size,
+                height:size,
+
+                // Decode at a healthy resolution even when the screen preview
+                // itself is small.
+                downScaledWidth:600,
+                downScaledHeight:600
+              };
+            }
+          }
+        );
+
+        scanner.setInversionMode('original');
+        await scanner.start();
+
+        scannerStatus.textContent = 'Ready — hold one QR code fully inside the center square.';
+
       } catch (error) {
         console.error(error);
         acceptingScan = false;
-        scannerStatus.textContent = 'Camera could not start. Check camera permission for this GitHub page.';
-        sendToApp({ type:'wiseman-box-scanner-error', message:'Camera could not start. Check camera permission for the GitHub Box Inventory page.' });
+        scannerStatus.textContent = 'Camera or QR scanner could not start.';
+        sendToApp({
+          type:'wiseman-box-scanner-error',
+          message:'The Box Inventory QR scanner could not start. Check camera permission and internet access.'
+        });
       }
     }
 
     async function onScanSuccess(decodedText) {
       if (!acceptingScan) return;
+
       const boxId = extractBoxId(decodedText);
+
       if (!boxId) {
-        scannerStatus.textContent = 'That QR code is not a Box Inventory label.';
+        scannerStatus.textContent = 'QR detected, but it is not a Box Inventory label.';
         return;
       }
 
       acceptingScan = false;
+
       if (navigator.vibrate) navigator.vibrate(70);
+
       successCode.textContent = boxId;
       scanSuccess.classList.add('show');
       sendToApp({ type:'wiseman-box-id', boxId:boxId });
@@ -195,16 +247,22 @@
         scannerOverlay.classList.remove('show');
         scannerOverlay.setAttribute('aria-hidden', 'true');
         scanSuccess.classList.remove('show');
-      }, 100);
+      }, 120);
     }
 
     async function stopScanner() {
       acceptingScan = false;
-      if (!scanner) return;
-      try { await scanner.stop(); } catch (error) {}
-      try { await scanner.clear(); } catch (error) {}
-      scanner = null;
-      document.getElementById('reader').innerHTML = '';
+
+      if (scanner) {
+        try { scanner.stop(); } catch (error) {}
+        try { scanner.destroy(); } catch (error) {}
+        scanner = null;
+      }
+
+      try {
+        scannerVideo.pause();
+        scannerVideo.srcObject = null;
+      } catch (error) {}
     }
 
     async function closeScanner() {
