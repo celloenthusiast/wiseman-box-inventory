@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Box Inventory</title>
+  <title>Boxes</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="favicon.png">
   <link rel="manifest" href="manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Box Inventory">
+  <meta name="apple-mobile-web-app-title" content="Boxes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#ffffff">
   <style>
@@ -61,13 +61,13 @@
   <div id="loading">
     <div class="loadingInner">
       <img class="loadingIcon" src="favicon.png" alt="">
-      <div class="loadingTitle">Box Inventory</div>
-      <div id="loadingText" class="loadingText">Opening inventory…</div>
+      <div class="loadingTitle">Boxes</div>
+      <div id="loadingText" class="loadingText">Opening boxes…</div>
       <div class="spinner" aria-hidden="true"></div>
     </div>
   </div>
 
-  <iframe id="appFrame" title="Box Inventory" allow="camera; clipboard-read; clipboard-write"></iframe>
+  <iframe id="appFrame" title="Boxes" allow="camera; clipboard-read; clipboard-write"></iframe>
 
   <div id="scannerOverlay" aria-hidden="true">
     <video id="scannerVideo" muted playsinline></video>
@@ -117,7 +117,9 @@
       if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec/.test(APPS_SCRIPT_URL)) return '';
       const url = new URL(APPS_SCRIPT_URL);
       url.searchParams.set('embed', '1');
-      url.searchParams.set('v', '1.2.0');
+      // Always request a fresh Apps Script page so a newly deployed
+      // version is not hidden behind an older cached iframe.
+      url.searchParams.set('v', String(Date.now()));
       const box = getRequestedBox();
       if (box) url.searchParams.set('box', box);
       return url.toString();
