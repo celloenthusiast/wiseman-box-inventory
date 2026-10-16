@@ -84,6 +84,7 @@
     // Scanner build 1.2.0 — Nimiq QR engine, center-region decoding.
     // IMPORTANT: replace this one value after deploying Apps Script.
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw-Y2TYCufqllfnCzcq_EtCh4sq7BWVmZTGsO5aT3XmEdlGarcEHz3LOPJlo26aOrT-/exec';
+    const AUTH_STORAGE_KEY = 'wisemanBoxesAuthSessionV1';
 
     const frame = document.getElementById('appFrame');
     const loading = document.getElementById('loading');
@@ -98,6 +99,72 @@
     let scanner = null;
     let QrScannerClass = null;
     let acceptingScan = false;
+
+    function readSavedAuthSession() {
+      try {
+        const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+        if (!raw) return null;
+
+        const session = JSON.parse(raw);
+        const token = String(session && session.token || '');
+        const expiresAt = Number(session && session.expiresAt || 0);
+
+        if (!token || !expiresAt || Date.now() >= expiresAt) {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          return null;
+        }
+
+        return { token, expiresAt };
+      } catch (error) {
+        try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (e) {}
+        return null;
+      }
+    }
+
+    function saveAuthSession(token, expiresAt) {
+      try {
+        const cleanToken = String(token || '');
+        const cleanExpires = Number(expiresAt || 0);
+
+        if (!cleanToken || !cleanExpires || Date.now() >= cleanExpires) {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          return;
+        }
+
+        localStorage.setItem(
+          AUTH_STORAGE_KEY,
+          JSON.stringify({
+            token: cleanToken,
+            expiresAt: cleanExpires
+          })
+        );
+      } catch (error) {
+        console.warn('Could not save Boxes login session.', error);
+      }
+    }
+
+    function clearAuthSession() {
+      try {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+      } catch (error) {}
+    }
+
+    function sendSavedAuthSession(targetWindow) {
+      const session = readSavedAuthSession();
+      const target = targetWindow || frame.contentWindow;
+      if (!target) return;
+
+      try {
+        target.postMessage(
+          {
+            type: 'wiseman-box-auth-token',
+            token: session ? session.token : '',
+            expiresAt: session ? session.expiresAt : 0
+          },
+          '*'
+        );
+      } catch (error) {}
+    }
 
     async function getQrScannerClass() {
       if (QrScannerClass) return QrScannerClass;
@@ -137,10 +204,30 @@
 
     window.addEventListener('message', event => {
       const data = event.data || {};
-      if (data.type !== 'wiseman-box-open-scanner') return;
-      if (!event.source || event.source === window) return;
+
+      // Only accept app messages from the iframe we created.
+      if (!event.source || event.source !== frame.contentWindow) return;
+
       appMessageWindow = event.source;
-      openScanner();
+
+      if (data.type === 'wiseman-box-auth-request') {
+        sendSavedAuthSession(event.source);
+        return;
+      }
+
+      if (data.type === 'wiseman-box-auth-store') {
+        saveAuthSession(data.token, data.expiresAt);
+        return;
+      }
+
+      if (data.type === 'wiseman-box-auth-clear') {
+        clearAuthSession();
+        return;
+      }
+
+      if (data.type === 'wiseman-box-open-scanner') {
+        openScanner();
+      }
     });
 
     function sendToApp(message) {
