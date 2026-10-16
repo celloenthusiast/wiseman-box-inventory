@@ -192,16 +192,10 @@
       return url.toString();
     }
 
-    const appUrl = buildAppUrl();
-    if (!appUrl) {
-      loadingText.textContent = 'Setup needed: edit GitHub index.html and paste your Apps Script /exec URL into APPS_SCRIPT_URL.';
-      document.querySelector('.spinner').style.display = 'none';
-    } else {
-      frame.src = appUrl;
-      frame.addEventListener('load', () => setTimeout(() => loading.classList.add('hidden'), 250));
-      setTimeout(() => loading.classList.add('hidden'), 8000);
-    }
-
+    // Install the message listener BEFORE the Apps Script iframe starts loading.
+    // On a fast Safari reopen, the child can request its saved auth token almost
+    // immediately; installing this listener afterward creates a race that can
+    // leave the PIN screen showing even though a valid session is stored.
     window.addEventListener('message', event => {
       const data = event.data || {};
 
@@ -229,6 +223,22 @@
         openScanner();
       }
     });
+
+    const appUrl = buildAppUrl();
+    if (!appUrl) {
+      loadingText.textContent = 'Setup needed: edit GitHub index.html and paste your Apps Script /exec URL into APPS_SCRIPT_URL.';
+      document.querySelector('.spinner').style.display = 'none';
+    } else {
+      frame.addEventListener('load', () => {
+        // Proactively send any remembered session too. The child also requests
+        // it, so either direction can win without leaving the PIN screen stuck.
+        sendSavedAuthSession(frame.contentWindow);
+        setTimeout(() => loading.classList.add('hidden'), 250);
+      });
+
+      frame.src = appUrl;
+      setTimeout(() => loading.classList.add('hidden'), 8000);
+    }
 
     function sendToApp(message) {
       if (appMessageWindow) {
