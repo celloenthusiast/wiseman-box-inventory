@@ -100,53 +100,106 @@
     let QrScannerClass = null;
     let acceptingScan = false;
 
-    function readSavedAuthSession() {
+    function readCookie(name) {
       try {
-        const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-        if (!raw) return null;
+        const prefix = name + '=';
+        const parts = String(document.cookie || '').split(';');
+        for (const part of parts) {
+          const value = part.trim();
+          if (value.indexOf(prefix) === 0) {
+            return decodeURIComponent(value.slice(prefix.length));
+          }
+        }
+      } catch (error) {}
+      return '';
+    }
 
+    function writeSessionCookie(raw, expiresAt) {
+      try {
+        if (!raw || !expiresAt) {
+          document.cookie =
+            AUTH_STORAGE_KEY +
+            '=; Max-Age=0; Path=/wiseman-box-inventory/; SameSite=Lax; Secure';
+          return;
+        }
+
+        const seconds = Math.max(
+          1,
+          Math.min(
+            7 * 24 * 60 * 60,
+            Math.floor((Number(expiresAt) - Date.now()) / 1000)
+          )
+        );
+
+        document.cookie =
+          AUTH_STORAGE_KEY + '=' + encodeURIComponent(raw) +
+          '; Max-Age=' + seconds +
+          '; Path=/wiseman-box-inventory/; SameSite=Lax; Secure';
+      } catch (error) {}
+    }
+
+    function readSavedAuthSession() {
+      let raw = '';
+
+      try {
+        raw = localStorage.getItem(AUTH_STORAGE_KEY) || '';
+      } catch (error) {}
+
+      // Cookie fallback makes the first-party session survive even if Safari
+      // decides to discard localStorage during a browser/app lifecycle event.
+      if (!raw) raw = readCookie(AUTH_STORAGE_KEY);
+      if (!raw) return null;
+
+      try {
         const session = JSON.parse(raw);
         const token = String(session && session.token || '');
         const expiresAt = Number(session && session.expiresAt || 0);
 
         if (!token || !expiresAt || Date.now() >= expiresAt) {
-          localStorage.removeItem(AUTH_STORAGE_KEY);
+          clearAuthSession();
           return null;
         }
 
+        // Repair whichever first-party storage mechanism was missing.
+        try { localStorage.setItem(AUTH_STORAGE_KEY, raw); } catch (error) {}
+        writeSessionCookie(raw, expiresAt);
+
         return { token, expiresAt };
       } catch (error) {
-        try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (e) {}
+        clearAuthSession();
         return null;
       }
     }
 
     function saveAuthSession(token, expiresAt) {
-      try {
-        const cleanToken = String(token || '');
-        const cleanExpires = Number(expiresAt || 0);
+      const cleanToken = String(token || '');
+      const cleanExpires = Number(expiresAt || 0);
 
-        if (!cleanToken || !cleanExpires || Date.now() >= cleanExpires) {
-          localStorage.removeItem(AUTH_STORAGE_KEY);
-          return;
-        }
-
-        localStorage.setItem(
-          AUTH_STORAGE_KEY,
-          JSON.stringify({
-            token: cleanToken,
-            expiresAt: cleanExpires
-          })
-        );
-      } catch (error) {
-        console.warn('Could not save Boxes login session.', error);
+      if (!cleanToken || !cleanExpires || Date.now() >= cleanExpires) {
+        clearAuthSession();
+        return;
       }
+
+      const raw = JSON.stringify({
+        token: cleanToken,
+        expiresAt: cleanExpires
+      });
+
+      try {
+        localStorage.setItem(AUTH_STORAGE_KEY, raw);
+      } catch (error) {
+        console.warn('Could not save Boxes login to localStorage.', error);
+      }
+
+      writeSessionCookie(raw, cleanExpires);
     }
 
     function clearAuthSession() {
       try {
         localStorage.removeItem(AUTH_STORAGE_KEY);
       } catch (error) {}
+
+      writeSessionCookie('', 0);
     }
 
     function sendSavedAuthSession(targetWindow) {
@@ -192,15 +245,23 @@
       return url.toString();
     }
 
-    // Install the message listener BEFORE the Apps Script iframe starts loading.
-    // On a fast Safari reopen, the child can request its saved auth token almost
-    // immediately; installing this listener afterward creates a race that can
-    // leave the PIN screen showing even though a valid session is stored.
+    function isTrustedAppsScriptOrigin(origin) {
+      const value = String(origin || '');
+      return (
+        value === 'https://script.google.com' ||
+        /^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/i.test(value) ||
+        /^https:\/\/[a-z0-9-]+-script\.googleusercontent\.com$/i.test(value)
+      );
+    }
+
+    // Install this before loading Apps Script. Apps Script may place the user's
+    // HTML inside an additional Google-owned iframe, so event.source is not
+    // guaranteed to equal frame.contentWindow. Validate the sender by origin
+    // and message type instead.
     window.addEventListener('message', event => {
       const data = event.data || {};
 
-      // Only accept app messages from the iframe we created.
-      if (!event.source || event.source !== frame.contentWindow) return;
+      if (!event.source || !isTrustedAppsScriptOrigin(event.origin)) return;
 
       appMessageWindow = event.source;
 
@@ -230,8 +291,9 @@
       document.querySelector('.spinner').style.display = 'none';
     } else {
       frame.addEventListener('load', () => {
-        // Proactively send any remembered session too. The child also requests
-        // it, so either direction can win without leaving the PIN screen stuck.
+        // The inner Apps Script document explicitly requests the token when it
+        // is ready. This proactive send still helps when Apps Script renders
+        // directly in the outer iframe.
         sendSavedAuthSession(frame.contentWindow);
         setTimeout(() => loading.classList.add('hidden'), 250);
       });
